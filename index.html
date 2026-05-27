@@ -235,6 +235,8 @@
         const contourLevels = 10;
         const terrainOverscan = 0.34;
         const fillSubdivisions = 3;
+        const contourSubdivisions = 3;
+        const heightSmoothing = 0.52;
         const searchParams = new URLSearchParams(window.location.search);
         const renderSurfaceShading = searchParams.get('shading') !== 'off';
         const colorPalette = searchParams.get('palette') || 'elevation';
@@ -380,16 +382,30 @@
             const cross = Math.cos((x * 0.9 + y * 3.1 - t * 1.6) * Math.PI);
             const swirl = Math.sin((Math.hypot(x - 0.62, y - 0.44) * 7.4 - t * 5.2) * Math.PI);
             const activity = 0.35 + 0.65 * Math.sin(base * Math.PI);
-            const movingRelief = (ridge * 0.024 + cross * 0.018 + swirl * 0.014) * activity;
+            const movingRelief = (ridge * 0.014 + cross * 0.011 + swirl * 0.008) * activity;
             return Math.max(0, Math.min(1, base + movingRelief));
         }
 
         function buildAnimatedGrid(time) {
-            animatedGrid = [];
+            const rawGrid = [];
             for (let j = 0; j <= gridRows; j++) {
                 const row = [];
                 for (let i = 0; i <= gridCols; i++) {
                     row.push(animatedValueAt(i, j, time));
+                }
+                rawGrid.push(row);
+            }
+
+            animatedGrid = [];
+            for (let j = 0; j <= gridRows; j++) {
+                const row = [];
+                for (let i = 0; i <= gridCols; i++) {
+                    const left = rawGrid[j][Math.max(0, i - 1)];
+                    const right = rawGrid[j][Math.min(gridCols, i + 1)];
+                    const up = rawGrid[Math.max(0, j - 1)][i];
+                    const down = rawGrid[Math.min(gridRows, j + 1)][i];
+                    const neighborAverage = (left + right + up + down) * 0.25;
+                    row.push(rawGrid[j][i] * (1 - heightSmoothing) + neighborAverage * heightSmoothing);
                 }
                 animatedGrid.push(row);
             }
@@ -432,6 +448,10 @@
             const top = animatedGrid[y0][x0] * (1 - tx) + animatedGrid[y0][x1] * tx;
             const bottom = animatedGrid[y1][x0] * (1 - tx) + animatedGrid[y1][x1] * tx;
             return top * (1 - ty) + bottom * ty;
+        }
+
+        function projectSampledPoint(x, y, value) {
+            return projectPoint(x, y, value);
         }
 
         function expandPolygon(points, amount) {
@@ -547,28 +567,40 @@
 
             for (let level = 1; level <= contourLevels; level++) {
                 const threshold = (level / (contourLevels + 1)) * maxD;
-                const tl = animatedGrid[j][i] >= threshold ? 1 : 0;
-                const tr = animatedGrid[j][i + 1] >= threshold ? 1 : 0;
-                const br = animatedGrid[j + 1][i + 1] >= threshold ? 1 : 0;
-                const bl = animatedGrid[j + 1][i] >= threshold ? 1 : 0;
-                const config = tl * 8 + tr * 4 + br * 2 + bl;
+                for (let sy = 0; sy < contourSubdivisions; sy++) {
+                    for (let sx = 0; sx < contourSubdivisions; sx++) {
+                        const x0 = i + sx / contourSubdivisions;
+                        const y0 = j + sy / contourSubdivisions;
+                        const x1 = i + (sx + 1) / contourSubdivisions;
+                        const y1 = j + (sy + 1) / contourSubdivisions;
+                        const v1 = sampleAnimatedGrid(x0, y0);
+                        const v2 = sampleAnimatedGrid(x1, y0);
+                        const v3 = sampleAnimatedGrid(x1, y1);
+                        const v4 = sampleAnimatedGrid(x0, y1);
+                        const tl = v1 >= threshold ? 1 : 0;
+                        const tr = v2 >= threshold ? 1 : 0;
+                        const br = v3 >= threshold ? 1 : 0;
+                        const bl = v4 >= threshold ? 1 : 0;
+                        const config = tl * 8 + tr * 4 + br * 2 + bl;
 
-                if (config === 0 || config === 15) continue;
+                        if (config === 0 || config === 15) continue;
 
-                const top = projectPoint(i + lerp(threshold, animatedGrid[j][i], animatedGrid[j][i + 1]), j, threshold);
-                const right = projectPoint(i + 1, j + lerp(threshold, animatedGrid[j][i + 1], animatedGrid[j + 1][i + 1]), threshold);
-                const bottom = projectPoint(i + lerp(threshold, animatedGrid[j + 1][i], animatedGrid[j + 1][i + 1]), j + 1, threshold);
-                const left = projectPoint(i, j + lerp(threshold, animatedGrid[j][i], animatedGrid[j + 1][i]), threshold);
+                        const top = projectSampledPoint(x0 + (x1 - x0) * lerp(threshold, v1, v2), y0, threshold);
+                        const right = projectSampledPoint(x1, y0 + (y1 - y0) * lerp(threshold, v2, v3), threshold);
+                        const bottom = projectSampledPoint(x0 + (x1 - x0) * lerp(threshold, v4, v3), y1, threshold);
+                        const left = projectSampledPoint(x0, y0 + (y1 - y0) * lerp(threshold, v1, v4), threshold);
 
-                switch (config) {
-                    case 1: case 14: drawLine(left, bottom); break;
-                    case 2: case 13: drawLine(bottom, right); break;
-                    case 3: case 12: drawLine(left, right); break;
-                    case 4: case 11: drawLine(top, right); break;
-                    case 5: drawLine(left, top); drawLine(bottom, right); break;
-                    case 6: case 9: drawLine(top, bottom); break;
-                    case 7: case 8: drawLine(left, top); break;
-                    case 10: drawLine(top, right); drawLine(left, bottom); break;
+                        switch (config) {
+                            case 1: case 14: drawLine(left, bottom); break;
+                            case 2: case 13: drawLine(bottom, right); break;
+                            case 3: case 12: drawLine(left, right); break;
+                            case 4: case 11: drawLine(top, right); break;
+                            case 5: drawLine(left, top); drawLine(bottom, right); break;
+                            case 6: case 9: drawLine(top, bottom); break;
+                            case 7: case 8: drawLine(left, top); break;
+                            case 10: drawLine(top, right); drawLine(left, bottom); break;
+                        }
+                    }
                 }
             }
         }
@@ -583,6 +615,8 @@
 
             ctx.save();
             ctx.globalAlpha = contourOpacity;
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
 
             if (renderSurfaceShading) {
                 const cells = [];
