@@ -39,7 +39,9 @@
         canvas {
             display: block;
             width: 100%;
-            height: 30vh;
+            height: 48vh;
+            min-height: 340px;
+            max-height: 560px;
             margin-bottom: 2rem;
         }
 
@@ -227,12 +229,26 @@
         const canvas = document.getElementById('kde');
         const ctx = canvas.getContext('2d');
 
-        let width, height, grid, maxD, gridCols, gridRows;
+        let width, height, grid, morphGrid, animatedGrid, maxD, minD, gridCols, gridRows, projectedGrid;
         const peaks = [];
+        const ridgeFields = [];
         const contourLevels = 10;
-        const resolution = 5;
+        const terrainOverscan = 0.34;
+        const fillSubdivisions = 3;
+        const searchParams = new URLSearchParams(window.location.search);
+        const renderSurfaceShading = searchParams.get('shading') !== 'off';
+        const colorPalette = searchParams.get('palette') || 'elevation';
+        const renderGrid = searchParams.get('grid') === 'on';
         let contourOpacity = 1;
         let targetOpacity = 1;
+
+        function createRandom(seed) {
+            let value = seed;
+            return () => {
+                value = (value * 1664525 + 1013904223) % 4294967296;
+                return value / 4294967296;
+            };
+        }
 
         function resize() {
             const dpr = window.devicePixelRatio || 1;
@@ -245,120 +261,455 @@
 
         function initPeaks() {
             peaks.length = 0;
-            const numPeaks = Math.ceil((width * height) / 8000);
+            ridgeFields.length = 0;
+            const random = createRandom(1337);
+            const numPeaks = Math.max(12, Math.ceil(width / 135));
+
+            peaks.push(
+                { x: 0.2, y: 0.34, sigmaX: 0.16, sigmaY: 0.24, rotation: 0.7, amplitude: 0.86 },
+                { x: 0.58, y: 0.48, sigmaX: 0.18, sigmaY: 0.12, rotation: -0.45, amplitude: 0.72 },
+                { x: 0.82, y: 0.28, sigmaX: 0.13, sigmaY: 0.22, rotation: 1.1, amplitude: 0.62 },
+                { x: 0.34, y: 0.76, sigmaX: 0.24, sigmaY: 0.12, rotation: -0.8, amplitude: 0.52 },
+                { x: 0.7, y: 0.75, sigmaX: 0.2, sigmaY: 0.16, rotation: 0.55, amplitude: -0.34 },
+                { x: 0.43, y: 0.18, sigmaX: 0.18, sigmaY: 0.11, rotation: 0.1, amplitude: -0.22 }
+            );
 
             for (let i = 0; i < numPeaks; i++) {
-                const sigma = 30 + Math.random() * 50;
                 peaks.push({
-                    x: Math.random() * (width + 150) - 75,
-                    y: Math.random() * (height + 150) - 75,
-                    sigma,
-                    radius: sigma * 3.5,
-                    amplitude: 0.4 + Math.random() * 0.6
+                    x: -0.14 + random() * 1.28,
+                    y: -0.14 + random() * 1.28,
+                    sigmaX: 0.045 + random() * 0.16,
+                    sigmaY: 0.05 + random() * 0.18,
+                    rotation: random() * Math.PI,
+                    amplitude: (random() > 0.24 ? 1 : -1) * (0.18 + random() * 0.38)
+                });
+            }
+
+            for (let i = 0; i < 7; i++) {
+                ridgeFields.push({
+                    angle: random() * Math.PI,
+                    offset: -0.45 + random() * 1.9,
+                    width: 0.045 + random() * 0.13,
+                    frequency: 2.2 + random() * 6.2,
+                    phase: random() * Math.PI * 2,
+                    amplitude: (random() > 0.3 ? 1 : -1) * (0.07 + random() * 0.15)
                 });
             }
         }
 
+        function densityAt(x, y) {
+            let d = 0;
+            const warpX = x + 0.055 * Math.sin((y * 2.8 + x * 0.7) * Math.PI + 0.6) + 0.025 * Math.sin((x + y) * 8.5);
+            const warpY = y + 0.06 * Math.cos((x * 2.4 - y * 0.6) * Math.PI + 1.1) + 0.02 * Math.cos((x - y) * 7.7);
+
+            for (const p of peaks) {
+                const dx = warpX - p.x;
+                const dy = warpY - p.y;
+                const cos = Math.cos(p.rotation);
+                const sin = Math.sin(p.rotation);
+                const rx = dx * cos - dy * sin;
+                const ry = dx * sin + dy * cos;
+                d += p.amplitude * Math.exp(-((rx * rx) / (2 * p.sigmaX * p.sigmaX) + (ry * ry) / (2 * p.sigmaY * p.sigmaY)));
+            }
+
+            for (const ridge of ridgeFields) {
+                const axis = warpX * Math.cos(ridge.angle) + warpY * Math.sin(ridge.angle);
+                const across = warpX * -Math.sin(ridge.angle) + warpY * Math.cos(ridge.angle);
+                const band = Math.exp(-Math.pow(across - ridge.offset, 2) / (2 * ridge.width * ridge.width));
+                d += Math.sin(axis * Math.PI * ridge.frequency + ridge.phase) * ridge.amplitude * band;
+            }
+
+            const ringA = Math.hypot(warpX - 0.63, warpY - 0.42);
+            const ringB = Math.hypot(warpX - 0.18, warpY - 0.72);
+            d += 0.18 * Math.exp(-Math.pow(ringA - 0.18, 2) / 0.004) - 0.16 * Math.exp(-(ringA * ringA) / 0.028);
+            d += 0.12 * Math.exp(-Math.pow(ringB - 0.13, 2) / 0.003) - 0.1 * Math.exp(-(ringB * ringB) / 0.018);
+            d += 0.08 * Math.tanh((warpX - warpY - 0.08) * 8);
+            d += 0.07 * Math.sin((warpX * 3.4 + warpY * 1.8) * Math.PI);
+            d += 0.05 * Math.cos((warpX * 1.2 - warpY * 4.2) * Math.PI);
+            return d;
+        }
+
         function buildGrid() {
-            gridCols = Math.ceil(width / resolution);
-            gridRows = Math.ceil(height / resolution);
+            gridCols = Math.min(88, Math.max(48, Math.round(width / 16)));
+            gridRows = Math.min(58, Math.max(34, Math.round(height / 9)));
             grid = [];
+            morphGrid = [];
             maxD = 0;
+            minD = Infinity;
+            let maxMorphD = 0;
+            let minMorphD = Infinity;
 
             for (let j = 0; j <= gridRows; j++) {
                 const row = [];
+                const morphRow = [];
                 for (let i = 0; i <= gridCols; i++) {
-                    let d = 0;
-                    const x = i * resolution;
-                    const y = j * resolution;
-                    for (const p of peaks) {
-                        const dx = x - p.x;
-                        const dy = y - p.y;
-                        if (dx * dx + dy * dy > p.radius * p.radius) continue;
-                        d += p.amplitude * Math.exp(-(dx * dx + dy * dy) / (2 * p.sigma * p.sigma));
-                    }
+                    const x = (i / gridCols) * (1 + terrainOverscan * 2) - terrainOverscan;
+                    const y = (j / gridRows) * (1 + terrainOverscan * 2) - terrainOverscan;
+                    const d = densityAt(x, y);
+                    const morphD = densityAt(x * 0.92 + 0.16, y * 1.08 - 0.1) + 0.08 * Math.sin((x * 1.7 + y * 2.2) * Math.PI);
                     if (d > maxD) maxD = d;
+                    if (d < minD) minD = d;
+                    if (morphD > maxMorphD) maxMorphD = morphD;
+                    if (morphD < minMorphD) minMorphD = morphD;
                     row.push(d);
+                    morphRow.push(morphD);
                 }
                 grid.push(row);
+                morphGrid.push(morphRow);
+            }
+
+            const range = maxD - minD || 1;
+            const morphRange = maxMorphD - minMorphD || 1;
+            for (let j = 0; j <= gridRows; j++) {
+                for (let i = 0; i <= gridCols; i++) {
+                    grid[j][i] = (grid[j][i] - minD) / range;
+                    morphGrid[j][i] = (morphGrid[j][i] - minMorphD) / morphRange;
+                }
+            }
+            minD = 0;
+            maxD = 1;
+        }
+
+        function animatedValueAt(i, j, time) {
+            const x = (i / gridCols) * (1 + terrainOverscan * 2) - terrainOverscan;
+            const y = (j / gridRows) * (1 + terrainOverscan * 2) - terrainOverscan;
+            const t = time * 0.00006;
+            const morph = 0.5 - 0.5 * Math.cos(time * 0.000052);
+            const base = grid[j][i] * (1 - morph) + morphGrid[j][i] * morph;
+            const ridge = Math.sin((x * 2.7 - y * 1.4 + t * 2.2) * Math.PI);
+            const cross = Math.cos((x * 0.9 + y * 3.1 - t * 1.6) * Math.PI);
+            const swirl = Math.sin((Math.hypot(x - 0.62, y - 0.44) * 7.4 - t * 5.2) * Math.PI);
+            const activity = 0.35 + 0.65 * Math.sin(base * Math.PI);
+            const movingRelief = (ridge * 0.024 + cross * 0.018 + swirl * 0.014) * activity;
+            return Math.max(0, Math.min(1, base + movingRelief));
+        }
+
+        function buildAnimatedGrid(time) {
+            animatedGrid = [];
+            for (let j = 0; j <= gridRows; j++) {
+                const row = [];
+                for (let i = 0; i <= gridCols; i++) {
+                    row.push(animatedValueAt(i, j, time));
+                }
+                animatedGrid.push(row);
+            }
+        }
+
+        function projectPoint(i, j, value) {
+            const x = (i / gridCols) * (1 + terrainOverscan * 2) - 0.5 - terrainOverscan;
+            const y = (j / gridRows) * (1 + terrainOverscan * 2) - 0.5 - terrainOverscan;
+            const z = value / maxD;
+            const scale = Math.max(width * 0.66, height * 1.22);
+            const isoX = (x - y) * scale * 0.96;
+            const isoY = (x + y) * scale * 0.44 - z * height * 0.48;
+
+            return {
+                x: width * 0.5 + isoX,
+                y: height * 0.68 + isoY,
+                z
+            };
+        }
+
+        function buildProjectedGrid(time) {
+            buildAnimatedGrid(time);
+            projectedGrid = [];
+            for (let j = 0; j <= gridRows; j++) {
+                const row = [];
+                for (let i = 0; i <= gridCols; i++) {
+                    row.push(projectPoint(i, j, animatedGrid[j][i]));
+                }
+                projectedGrid.push(row);
+            }
+        }
+
+        function sampleAnimatedGrid(x, y) {
+            const x0 = Math.max(0, Math.min(gridCols - 1, Math.floor(x)));
+            const y0 = Math.max(0, Math.min(gridRows - 1, Math.floor(y)));
+            const x1 = Math.min(gridCols, x0 + 1);
+            const y1 = Math.min(gridRows, y0 + 1);
+            const tx = x - x0;
+            const ty = y - y0;
+            const top = animatedGrid[y0][x0] * (1 - tx) + animatedGrid[y0][x1] * tx;
+            const bottom = animatedGrid[y1][x0] * (1 - tx) + animatedGrid[y1][x1] * tx;
+            return top * (1 - ty) + bottom * ty;
+        }
+
+        function expandPolygon(points, amount) {
+            const center = points.reduce((acc, point) => ({
+                x: acc.x + point.x / points.length,
+                y: acc.y + point.y / points.length
+            }), { x: 0, y: 0 });
+
+            return points.map((point) => ({
+                x: center.x + (point.x - center.x) * amount,
+                y: center.y + (point.y - center.y) * amount
+            }));
+        }
+
+        function drawFilledPatch(x0, y0, x1, y1, depth) {
+            const v1 = sampleAnimatedGrid(x0, y0);
+            const v2 = sampleAnimatedGrid(x1, y0);
+            const v3 = sampleAnimatedGrid(x1, y1);
+            const v4 = sampleAnimatedGrid(x0, y1);
+            const [p1, p2, p3, p4] = expandPolygon([
+                projectPoint(x0, y0, v1),
+                projectPoint(x1, y0, v2),
+                projectPoint(x1, y1, v3),
+                projectPoint(x0, y1, v4)
+            ], 1.018);
+            const average = (v1 + v2 + v3 + v4) / 4;
+            const slope = Math.abs(v1 - v3) + Math.abs(v2 - v4);
+
+            ctx.beginPath();
+            ctx.moveTo(p1.x, p1.y);
+            ctx.lineTo(p2.x, p2.y);
+            ctx.lineTo(p3.x, p3.y);
+            ctx.lineTo(p4.x, p4.y);
+            ctx.closePath();
+            ctx.fillStyle = shadeCell(average, depth, slope);
+            ctx.fill();
+        }
+
+        function drawCellUnderfill(i, j, depth) {
+            const [p1, p2, p3, p4] = expandPolygon([
+                projectedGrid[j][i],
+                projectedGrid[j][i + 1],
+                projectedGrid[j + 1][i + 1],
+                projectedGrid[j + 1][i]
+            ], 1.012);
+            const average = (animatedGrid[j][i] + animatedGrid[j][i + 1] + animatedGrid[j + 1][i + 1] + animatedGrid[j + 1][i]) / 4;
+            const slope = Math.abs(animatedGrid[j][i] - animatedGrid[j + 1][i + 1]) + Math.abs(animatedGrid[j][i + 1] - animatedGrid[j + 1][i]);
+
+            ctx.beginPath();
+            ctx.moveTo(p1.x, p1.y);
+            ctx.lineTo(p2.x, p2.y);
+            ctx.lineTo(p3.x, p3.y);
+            ctx.lineTo(p4.x, p4.y);
+            ctx.closePath();
+            ctx.fillStyle = shadeCell(average, depth, slope);
+            ctx.fill();
+        }
+
+        function mixColor(a, b, amount) {
+            return a.map((channel, index) => channel + (b[index] - channel) * amount);
+        }
+
+        function shadeCell(value, depth, slope) {
+            const t = maxD === 0 ? 0 : value / maxD;
+            if (colorPalette === 'lava' || colorPalette === 'elevation') {
+                const stops = [
+                    ...(colorPalette === 'elevation'
+                        ? [
+                            [90, 45, 210],
+                            [45, 105, 240],
+                            [25, 220, 230],
+                            [95, 245, 145],
+                            [205, 250, 72],
+                            [255, 222, 48],
+                            [255, 135, 34],
+                            [238, 50, 38]
+                        ]
+                        : [
+                            [42, 16, 36],
+                            [124, 24, 58],
+                            [218, 38, 88],
+                            [255, 102, 42],
+                            [255, 214, 92]
+                        ])
+                ];
+                const scaled = Math.min(stops.length - 1.001, Math.max(0, t * (stops.length - 1)));
+                const index = Math.floor(scaled);
+                const amount = scaled - index;
+                const color = mixColor(stops[index], stops[index + 1], amount);
+                const shadeLimit = colorPalette === 'elevation' ? 0.18 : 0.28;
+                const shade = 1 - Math.min(shadeLimit, depth * 0.06 + slope * 0.48);
+                const lift = colorPalette === 'elevation' ? 4 : 10 + t * 6;
+                const r = Math.round(color[0] * shade + lift);
+                const g = Math.round(color[1] * shade + lift);
+                const b = Math.round(color[2] * shade + lift);
+                return `rgb(${r}, ${g}, ${b})`;
+            }
+
+            const hue = 202 - t * 82 + depth * 26;
+            const light = 96 - t * 18 - depth * 5 - Math.min(10, slope * 48);
+            return `hsl(${hue}, ${24 + t * 38 + slope * 42}%, ${light}%)`;
+        }
+
+        function drawContourSegmentsForCell(i, j) {
+            const lerp = (threshold, va, vb) => {
+                if (Math.abs(vb - va) < 0.0001) return 0.5;
+                return (threshold - va) / (vb - va);
+            };
+            const drawLine = (p1, p2) => {
+                ctx.moveTo(p1.x, p1.y);
+                ctx.lineTo(p2.x, p2.y);
+            };
+
+            for (let level = 1; level <= contourLevels; level++) {
+                const threshold = (level / (contourLevels + 1)) * maxD;
+                const tl = animatedGrid[j][i] >= threshold ? 1 : 0;
+                const tr = animatedGrid[j][i + 1] >= threshold ? 1 : 0;
+                const br = animatedGrid[j + 1][i + 1] >= threshold ? 1 : 0;
+                const bl = animatedGrid[j + 1][i] >= threshold ? 1 : 0;
+                const config = tl * 8 + tr * 4 + br * 2 + bl;
+
+                if (config === 0 || config === 15) continue;
+
+                const top = projectPoint(i + lerp(threshold, animatedGrid[j][i], animatedGrid[j][i + 1]), j, threshold);
+                const right = projectPoint(i + 1, j + lerp(threshold, animatedGrid[j][i + 1], animatedGrid[j + 1][i + 1]), threshold);
+                const bottom = projectPoint(i + lerp(threshold, animatedGrid[j + 1][i], animatedGrid[j + 1][i + 1]), j + 1, threshold);
+                const left = projectPoint(i, j + lerp(threshold, animatedGrid[j][i], animatedGrid[j + 1][i]), threshold);
+
+                switch (config) {
+                    case 1: case 14: drawLine(left, bottom); break;
+                    case 2: case 13: drawLine(bottom, right); break;
+                    case 3: case 12: drawLine(left, right); break;
+                    case 4: case 11: drawLine(top, right); break;
+                    case 5: drawLine(left, top); drawLine(bottom, right); break;
+                    case 6: case 9: drawLine(top, bottom); break;
+                    case 7: case 8: drawLine(left, top); break;
+                    case 10: drawLine(top, right); drawLine(left, bottom); break;
+                }
             }
         }
 
         function draw(time) {
-            const pulse = 0.9 + 0.1 * Math.sin(time * 0.0004);
-
-            // Smooth opacity transitions
             const fadeSpeed = targetOpacity === 0 ? 0.15 : 0.03;
             contourOpacity += (targetOpacity - contourOpacity) * fadeSpeed;
+            buildProjectedGrid(time);
 
             ctx.fillStyle = '#fafafa';
             ctx.fillRect(0, 0, width, height);
 
-            ctx.strokeStyle = `rgba(0, 0, 0, ${0.25 * contourOpacity})`;
-            ctx.lineWidth = 1;
+            ctx.save();
+            ctx.globalAlpha = contourOpacity;
 
-            // Draw contour lines using marching squares
-            for (let level = 1; level <= contourLevels; level++) {
-                const threshold = (level / (contourLevels + 1)) * maxD * pulse;
-
-                ctx.beginPath();
-
+            if (renderSurfaceShading) {
+                const cells = [];
                 for (let j = 0; j < gridRows; j++) {
                     for (let i = 0; i < gridCols; i++) {
-                        const x = i * resolution;
-                        const y = j * resolution;
-
-                        const tl = grid[j][i] >= threshold ? 1 : 0;
-                        const tr = grid[j][i + 1] >= threshold ? 1 : 0;
-                        const br = grid[j + 1][i + 1] >= threshold ? 1 : 0;
-                        const bl = grid[j + 1][i] >= threshold ? 1 : 0;
-
-                        const config = tl * 8 + tr * 4 + br * 2 + bl;
-                        if (config === 0 || config === 15) continue;
-
-                        const lerp = (va, vb) => {
-                            if (Math.abs(vb - va) < 0.0001) return 0.5;
-                            return (threshold - va) / (vb - va);
-                        };
-
-                        const top = { x: x + lerp(grid[j][i], grid[j][i + 1]) * resolution, y };
-                        const right = { x: x + resolution, y: y + lerp(grid[j][i + 1], grid[j + 1][i + 1]) * resolution };
-                        const bottom = { x: x + lerp(grid[j + 1][i], grid[j + 1][i + 1]) * resolution, y: y + resolution };
-                        const left = { x, y: y + lerp(grid[j][i], grid[j + 1][i]) * resolution };
-
-                        const drawLine = (p1, p2) => {
-                            ctx.moveTo(p1.x, p1.y);
-                            ctx.lineTo(p2.x, p2.y);
-                        };
-
-                        switch (config) {
-                            case 1: case 14: drawLine(left, bottom); break;
-                            case 2: case 13: drawLine(bottom, right); break;
-                            case 3: case 12: drawLine(left, right); break;
-                            case 4: case 11: drawLine(top, right); break;
-                            case 5: drawLine(left, top); drawLine(bottom, right); break;
-                            case 6: case 9: drawLine(top, bottom); break;
-                            case 7: case 8: drawLine(left, top); break;
-                            case 10: drawLine(top, right); drawLine(left, bottom); break;
-                        }
+                        const p1 = projectedGrid[j][i];
+                        const p2 = projectedGrid[j][i + 1];
+                        const p3 = projectedGrid[j + 1][i + 1];
+                        const p4 = projectedGrid[j + 1][i];
+                        cells.push({ i, j, depth: i + j });
                     }
                 }
-                ctx.stroke();
+                cells.sort((a, b) => a.depth - b.depth);
+
+                for (const cell of cells) {
+                    const { i, j } = cell;
+                    const p1 = projectedGrid[j][i];
+                    const p2 = projectedGrid[j][i + 1];
+                    const p3 = projectedGrid[j + 1][i + 1];
+                    const p4 = projectedGrid[j + 1][i];
+                    const depth = (j + i) / (gridCols + gridRows);
+
+                    drawCellUnderfill(i, j, depth);
+
+                    for (let sy = 0; sy < fillSubdivisions; sy++) {
+                        for (let sx = 0; sx < fillSubdivisions; sx++) {
+                            const x0 = i + sx / fillSubdivisions;
+                            const y0 = j + sy / fillSubdivisions;
+                            const x1 = i + (sx + 1) / fillSubdivisions;
+                            const y1 = j + (sy + 1) / fillSubdivisions;
+                            drawFilledPatch(x0, y0, x1, y1, depth);
+                        }
+                    }
+
+                    if (renderGrid) {
+                        ctx.strokeStyle = 'rgba(0, 0, 0, 0.045)';
+                        ctx.lineWidth = 1;
+                        ctx.beginPath();
+                        ctx.moveTo(p1.x, p1.y);
+                        ctx.lineTo(p2.x, p2.y);
+                        ctx.lineTo(p3.x, p3.y);
+                        ctx.lineTo(p4.x, p4.y);
+                        ctx.closePath();
+                        ctx.stroke();
+                    }
+
+                    ctx.beginPath();
+                    ctx.strokeStyle = 'rgba(0, 0, 0, 0.28)';
+                    ctx.lineWidth = 1.05;
+                    drawContourSegmentsForCell(i, j);
+                    ctx.stroke();
+                }
             }
 
-            // Draw grid overlay
-            ctx.strokeStyle = 'rgba(0, 0, 0, 0.05)';
-            ctx.beginPath();
-            const gridSpacing = 40;
-            for (let x = 0; x <= width; x += gridSpacing) {
-                ctx.moveTo(x, 0);
-                ctx.lineTo(x, height);
+            if (!renderSurfaceShading) {
+                if (renderGrid) {
+                    ctx.strokeStyle = 'rgba(0, 0, 0, 0.075)';
+                    ctx.lineWidth = 1;
+                    for (let j = 0; j <= gridRows; j += 2) {
+                        ctx.beginPath();
+                        for (let i = 0; i <= gridCols; i++) {
+                            const p = projectedGrid[j][i];
+                            if (i === 0) ctx.moveTo(p.x, p.y);
+                            else ctx.lineTo(p.x, p.y);
+                        }
+                        ctx.stroke();
+                    }
+                    for (let i = 0; i <= gridCols; i += 2) {
+                        ctx.beginPath();
+                        for (let j = 0; j <= gridRows; j++) {
+                            const p = projectedGrid[j][i];
+                            if (j === 0) ctx.moveTo(p.x, p.y);
+                            else ctx.lineTo(p.x, p.y);
+                        }
+                        ctx.stroke();
+                    }
+                }
+
+                ctx.strokeStyle = 'rgba(0, 0, 0, 0.28)';
+                ctx.lineWidth = 1.1;
+                for (let level = 1; level <= contourLevels; level++) {
+                    const threshold = (level / (contourLevels + 1)) * maxD;
+
+                    ctx.beginPath();
+
+                    for (let j = 0; j < gridRows; j++) {
+                        for (let i = 0; i < gridCols; i++) {
+                            const tl = animatedGrid[j][i] >= threshold ? 1 : 0;
+                            const tr = animatedGrid[j][i + 1] >= threshold ? 1 : 0;
+                            const br = animatedGrid[j + 1][i + 1] >= threshold ? 1 : 0;
+                            const bl = animatedGrid[j + 1][i] >= threshold ? 1 : 0;
+
+                            const config = tl * 8 + tr * 4 + br * 2 + bl;
+                            if (config === 0 || config === 15) continue;
+
+                            const lerp = (va, vb) => {
+                                if (Math.abs(vb - va) < 0.0001) return 0.5;
+                                return (threshold - va) / (vb - va);
+                            };
+
+                            const top = projectPoint(i + lerp(animatedGrid[j][i], animatedGrid[j][i + 1]), j, threshold);
+                            const right = projectPoint(i + 1, j + lerp(animatedGrid[j][i + 1], animatedGrid[j + 1][i + 1]), threshold);
+                            const bottom = projectPoint(i + lerp(animatedGrid[j + 1][i], animatedGrid[j + 1][i + 1]), j + 1, threshold);
+                            const left = projectPoint(i, j + lerp(animatedGrid[j][i], animatedGrid[j + 1][i]), threshold);
+
+                            const drawLine = (p1, p2) => {
+                                ctx.moveTo(p1.x, p1.y);
+                                ctx.lineTo(p2.x, p2.y);
+                            };
+
+                            switch (config) {
+                                case 1: case 14: drawLine(left, bottom); break;
+                                case 2: case 13: drawLine(bottom, right); break;
+                                case 3: case 12: drawLine(left, right); break;
+                                case 4: case 11: drawLine(top, right); break;
+                                case 5: drawLine(left, top); drawLine(bottom, right); break;
+                                case 6: case 9: drawLine(top, bottom); break;
+                                case 7: case 8: drawLine(left, top); break;
+                                case 10: drawLine(top, right); drawLine(left, bottom); break;
+                            }
+                        }
+                    }
+                    ctx.stroke();
+                }
             }
-            for (let y = 0; y <= height; y += gridSpacing) {
-                ctx.moveTo(0, y);
-                ctx.lineTo(width, y);
-            }
-            ctx.stroke();
+
+            ctx.restore();
 
             requestAnimationFrame(draw);
         }
