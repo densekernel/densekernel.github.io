@@ -36,13 +36,22 @@
             transition: background 0.3s, color 0.3s;
         }
 
+        .visualization-viewport {
+            width: 100%;
+            overflow: hidden;
+            margin-bottom: 2rem;
+        }
+
         canvas {
             display: block;
-            width: 100%;
+            width: 2200px;
+            max-width: none;
             height: 48vh;
             min-height: 340px;
             max-height: 560px;
-            margin-bottom: 2rem;
+            position: relative;
+            left: 50%;
+            transform: translateX(-50%);
         }
 
         .container {
@@ -91,6 +100,10 @@
             color: var(--fg-subtle);
         }
 
+        .intro + .intro {
+            margin-top: 1rem;
+        }
+
         h2 {
             font-family: 'Geist Pixel', sans-serif;
             font-weight: 500;
@@ -117,6 +130,31 @@
             text-decoration: none;
             color: inherit;
             transition: opacity 0.2s;
+        }
+
+        .project::before {
+            content: '';
+            width: 0.7rem;
+            height: 0.7rem;
+            flex: 0 0 0.7rem;
+            margin-top: 0.25rem;
+            background: var(--project-accent);
+        }
+
+        .project:nth-child(1) {
+            --project-accent: rgb(238, 50, 38);
+        }
+
+        .project:nth-child(2) {
+            --project-accent: rgb(255, 135, 34);
+        }
+
+        .project:nth-child(3) {
+            --project-accent: rgb(25, 220, 230);
+        }
+
+        .project:nth-child(4) {
+            --project-accent: rgb(90, 45, 210);
         }
 
         .project:hover {
@@ -177,11 +215,20 @@
             <a href="/" class="logo">densekernel</a>
         </div>
     </nav>
-    <canvas id="kde"></canvas>
+    <div class="visualization-viewport">
+        <canvas id="kde"></canvas>
+    </div>
     <main class="container">
         <section>
             <h2>Projects</h2>
             <div class="projects">
+                <a href="https://associateai.com/" target="_blank" rel="noopener" class="project">
+                    <div class="project-info">
+                        <span class="project-name">Associate AI</span>
+                        <p class="project-desc">Integrity layer for financial documents</p>
+                    </div>
+                    <span class="project-arrow">→</span>
+                </a>
                 <a href="https://www.checkstep.com/" target="_blank" rel="noopener" class="project">
                     <div class="project-info">
                         <span class="project-name">Checkstep</span>
@@ -213,7 +260,8 @@
 
         <section class="about">
             <h2>What is Dense Kernel</h2>
-            <p class="intro">A concentration of core knowledge. From kernel density estimation in statistics, to the kernel at the heart of an operating system, to the dense kernel of a seed. The essential part, tightly packed. <em>A triple entendre.</em></p>
+            <p class="intro">A concentration of core knowledge. From kernel density estimation in statistics, to the kernel at the heart of an operating system, to the dense kernel of a seed.</p>
+            <p class="intro">Kernel density estimation turns scattered data points into a smooth probability surface. The animation above borrows that idea: contours and gradients suggest a model moving across a landscape. In machine learning and AI, gradient descent is one of the core ways systems learn, iteratively following slope to reduce error.</p>
         </section>
 
         <div class="social">
@@ -233,16 +281,25 @@
         const peaks = [];
         const ridgeFields = [];
         const contourLevels = 10;
-        const terrainOverscan = 0.34;
+        const terrainOverscanX = 1.15;
+        const terrainOverscanY = 0.68;
+        const terrainGridCols = 112;
+        const terrainGridRows = 76;
         const fillSubdivisions = 3;
         const contourSubdivisions = 3;
-        const heightSmoothing = 0.52;
+        const contourCurveTension = 0.36;
+        const heightSmoothing = 0.44;
+        const contourStrokeColor = 'rgba(0, 0, 0, 0.2)';
+        const driftingBlobs = [
+            { x: 0.22, y: 0.34, radius: 0.24, amplitude: 0.058, speedX: 0.72, speedY: 0.43, phase: 0.4 },
+            { x: 0.68, y: 0.3, radius: 0.2, amplitude: 0.048, speedX: 0.48, speedY: 0.67, phase: 2.1 },
+            { x: 0.42, y: 0.72, radius: 0.26, amplitude: -0.052, speedX: 0.36, speedY: 0.58, phase: 4.2 },
+            { x: 0.78, y: 0.68, radius: 0.22, amplitude: 0.044, speedX: 0.62, speedY: 0.31, phase: 5.4 }
+        ];
         const searchParams = new URLSearchParams(window.location.search);
         const renderSurfaceShading = searchParams.get('shading') !== 'off';
         const colorPalette = searchParams.get('palette') || 'elevation';
         const renderGrid = searchParams.get('grid') === 'on';
-        let contourOpacity = 1;
-        let targetOpacity = 1;
 
         function createRandom(seed) {
             let value = seed;
@@ -261,11 +318,19 @@
             ctx.scale(dpr, dpr);
         }
 
+        function terrainX(i) {
+            return (i / gridCols) * (1 + terrainOverscanX * 2) - terrainOverscanX;
+        }
+
+        function terrainY(j) {
+            return (j / gridRows) * (1 + terrainOverscanY * 2) - terrainOverscanY;
+        }
+
         function initPeaks() {
             peaks.length = 0;
             ridgeFields.length = 0;
             const random = createRandom(1337);
-            const numPeaks = Math.max(12, Math.ceil(width / 135));
+            const numPeaks = 18;
 
             peaks.push(
                 { x: 0.2, y: 0.34, sigmaX: 0.16, sigmaY: 0.24, rotation: 0.7, amplitude: 0.86 },
@@ -332,8 +397,8 @@
         }
 
         function buildGrid() {
-            gridCols = Math.min(88, Math.max(48, Math.round(width / 16)));
-            gridRows = Math.min(58, Math.max(34, Math.round(height / 9)));
+            gridCols = terrainGridCols;
+            gridRows = terrainGridRows;
             grid = [];
             morphGrid = [];
             maxD = 0;
@@ -345,8 +410,8 @@
                 const row = [];
                 const morphRow = [];
                 for (let i = 0; i <= gridCols; i++) {
-                    const x = (i / gridCols) * (1 + terrainOverscan * 2) - terrainOverscan;
-                    const y = (j / gridRows) * (1 + terrainOverscan * 2) - terrainOverscan;
+                    const x = terrainX(i);
+                    const y = terrainY(j);
                     const d = densityAt(x, y);
                     const morphD = densityAt(x * 0.92 + 0.16, y * 1.08 - 0.1) + 0.08 * Math.sin((x * 1.7 + y * 2.2) * Math.PI);
                     if (d > maxD) maxD = d;
@@ -373,16 +438,28 @@
         }
 
         function animatedValueAt(i, j, time) {
-            const x = (i / gridCols) * (1 + terrainOverscan * 2) - terrainOverscan;
-            const y = (j / gridRows) * (1 + terrainOverscan * 2) - terrainOverscan;
-            const t = time * 0.00006;
+            const x = terrainX(i);
+            const y = terrainY(j);
+            const t = time * 0.00005;
             const morph = 0.5 - 0.5 * Math.cos(time * 0.000052);
             const base = grid[j][i] * (1 - morph) + morphGrid[j][i] * morph;
             const ridge = Math.sin((x * 2.7 - y * 1.4 + t * 2.2) * Math.PI);
             const cross = Math.cos((x * 0.9 + y * 3.1 - t * 1.6) * Math.PI);
             const swirl = Math.sin((Math.hypot(x - 0.62, y - 0.44) * 7.4 - t * 5.2) * Math.PI);
             const activity = 0.35 + 0.65 * Math.sin(base * Math.PI);
-            const movingRelief = (ridge * 0.014 + cross * 0.011 + swirl * 0.008) * activity;
+            const driftX = x + 0.035 * Math.sin((y * 2.1 + t * 1.7) * Math.PI);
+            const driftY = y + 0.03 * Math.cos((x * 1.8 - t * 1.4) * Math.PI);
+            let blobRelief = 0;
+
+            for (const blob of driftingBlobs) {
+                const cx = blob.x + Math.sin(t * blob.speedX + blob.phase) * 0.16;
+                const cy = blob.y + Math.cos(t * blob.speedY + blob.phase * 1.37) * 0.13;
+                const dx = driftX - cx;
+                const dy = driftY - cy;
+                blobRelief += blob.amplitude * Math.exp(-(dx * dx + dy * dy) / (2 * blob.radius * blob.radius));
+            }
+
+            const movingRelief = (ridge * 0.009 + cross * 0.007 + swirl * 0.006 + blobRelief) * activity;
             return Math.max(0, Math.min(1, base + movingRelief));
         }
 
@@ -412,16 +489,16 @@
         }
 
         function projectPoint(i, j, value) {
-            const x = (i / gridCols) * (1 + terrainOverscan * 2) - 0.5 - terrainOverscan;
-            const y = (j / gridRows) * (1 + terrainOverscan * 2) - 0.5 - terrainOverscan;
+            const x = terrainX(i) - 0.5;
+            const y = terrainY(j) - 0.5;
             const z = value / maxD;
-            const scale = Math.max(width * 0.66, height * 1.22);
+            const scale = height * 1.48;
             const isoX = (x - y) * scale * 0.96;
             const isoY = (x + y) * scale * 0.44 - z * height * 0.48;
 
             return {
                 x: width * 0.5 + isoX,
-                y: height * 0.68 + isoY,
+                y: height * 0.62 + isoY,
                 z
             };
         }
@@ -476,7 +553,7 @@
                 projectPoint(x1, y0, v2),
                 projectPoint(x1, y1, v3),
                 projectPoint(x0, y1, v4)
-            ], 1.018);
+            ], 1.028);
             const average = (v1 + v2 + v3 + v4) / 4;
             const slope = Math.abs(v1 - v3) + Math.abs(v2 - v4);
 
@@ -496,7 +573,7 @@
                 projectedGrid[j][i + 1],
                 projectedGrid[j + 1][i + 1],
                 projectedGrid[j + 1][i]
-            ], 1.012);
+            ], 1.035);
             const average = (animatedGrid[j][i] + animatedGrid[j][i + 1] + animatedGrid[j + 1][i + 1] + animatedGrid[j + 1][i]) / 4;
             const slope = Math.abs(animatedGrid[j][i] - animatedGrid[j + 1][i + 1]) + Math.abs(animatedGrid[j][i + 1] - animatedGrid[j + 1][i]);
 
@@ -560,13 +637,76 @@
                 if (Math.abs(vb - va) < 0.0001) return 0.5;
                 return (threshold - va) / (vb - va);
             };
-            const drawLine = (p1, p2) => {
-                ctx.moveTo(p1.x, p1.y);
-                ctx.lineTo(p2.x, p2.y);
+            const areClose = (p1, p2) => {
+                const dx = p1.x - p2.x;
+                const dy = p1.y - p2.y;
+                return dx * dx + dy * dy < 1;
+            };
+            const drawSmoothedLine = (points) => {
+                if (points.length < 2) return;
+
+                ctx.moveTo(points[0].x, points[0].y);
+
+                if (points.length === 2) {
+                    ctx.lineTo(points[1].x, points[1].y);
+                    return;
+                }
+
+                for (let pointIndex = 1; pointIndex < points.length - 1; pointIndex++) {
+                    const current = points[pointIndex];
+                    const next = points[pointIndex + 1];
+                    const mid = {
+                        x: (current.x + next.x) * 0.5,
+                        y: (current.y + next.y) * 0.5
+                    };
+                    const previous = points[pointIndex - 1];
+                    const softControl = {
+                        x: mid.x + (current.x - (previous.x + next.x) * 0.5) * contourCurveTension,
+                        y: mid.y + (current.y - (previous.y + next.y) * 0.5) * contourCurveTension
+                    };
+                    ctx.quadraticCurveTo(softControl.x, softControl.y, mid.x, mid.y);
+                }
+
+                const last = points[points.length - 1];
+                ctx.lineTo(last.x, last.y);
+            };
+            const drawSmoothedSegments = (segments) => {
+                while (segments.length) {
+                    const segment = segments.pop();
+                    const line = [segment[0], segment[1]];
+                    let extended = true;
+
+                    while (extended) {
+                        extended = false;
+
+                        for (let segmentIndex = segments.length - 1; segmentIndex >= 0; segmentIndex--) {
+                            const [start, end] = segments[segmentIndex];
+
+                            if (areClose(line[line.length - 1], start)) {
+                                line.push(end);
+                            } else if (areClose(line[line.length - 1], end)) {
+                                line.push(start);
+                            } else if (areClose(line[0], end)) {
+                                line.unshift(start);
+                            } else if (areClose(line[0], start)) {
+                                line.unshift(end);
+                            } else {
+                                continue;
+                            }
+
+                            segments.splice(segmentIndex, 1);
+                            extended = true;
+                        }
+                    }
+
+                    drawSmoothedLine(line);
+                }
             };
 
             for (let level = 1; level <= contourLevels; level++) {
                 const threshold = (level / (contourLevels + 1)) * maxD;
+                const segments = [];
+
                 for (let sy = 0; sy < contourSubdivisions; sy++) {
                     for (let sx = 0; sx < contourSubdivisions; sx++) {
                         const x0 = i + sx / contourSubdivisions;
@@ -591,30 +731,29 @@
                         const left = projectSampledPoint(x0, y0 + (y1 - y0) * lerp(threshold, v1, v4), threshold);
 
                         switch (config) {
-                            case 1: case 14: drawLine(left, bottom); break;
-                            case 2: case 13: drawLine(bottom, right); break;
-                            case 3: case 12: drawLine(left, right); break;
-                            case 4: case 11: drawLine(top, right); break;
-                            case 5: drawLine(left, top); drawLine(bottom, right); break;
-                            case 6: case 9: drawLine(top, bottom); break;
-                            case 7: case 8: drawLine(left, top); break;
-                            case 10: drawLine(top, right); drawLine(left, bottom); break;
+                            case 1: case 14: segments.push([left, bottom]); break;
+                            case 2: case 13: segments.push([bottom, right]); break;
+                            case 3: case 12: segments.push([left, right]); break;
+                            case 4: case 11: segments.push([top, right]); break;
+                            case 5: segments.push([left, top], [bottom, right]); break;
+                            case 6: case 9: segments.push([top, bottom]); break;
+                            case 7: case 8: segments.push([left, top]); break;
+                            case 10: segments.push([top, right], [left, bottom]); break;
                         }
                     }
                 }
+
+                drawSmoothedSegments(segments);
             }
         }
 
         function draw(time) {
-            const fadeSpeed = targetOpacity === 0 ? 0.15 : 0.03;
-            contourOpacity += (targetOpacity - contourOpacity) * fadeSpeed;
             buildProjectedGrid(time);
 
             ctx.fillStyle = '#fafafa';
             ctx.fillRect(0, 0, width, height);
 
             ctx.save();
-            ctx.globalAlpha = contourOpacity;
             ctx.lineCap = 'round';
             ctx.lineJoin = 'round';
 
@@ -664,8 +803,8 @@
                     }
 
                     ctx.beginPath();
-                    ctx.strokeStyle = 'rgba(0, 0, 0, 0.28)';
-                    ctx.lineWidth = 1.05;
+                    ctx.strokeStyle = contourStrokeColor;
+                    ctx.lineWidth = 1;
                     drawContourSegmentsForCell(i, j);
                     ctx.stroke();
                 }
@@ -695,8 +834,8 @@
                     }
                 }
 
-                ctx.strokeStyle = 'rgba(0, 0, 0, 0.28)';
-                ctx.lineWidth = 1.1;
+                ctx.strokeStyle = contourStrokeColor;
+                ctx.lineWidth = 1;
                 for (let level = 1; level <= contourLevels; level++) {
                     const threshold = (level / (contourLevels + 1)) * maxD;
 
@@ -748,16 +887,8 @@
             requestAnimationFrame(draw);
         }
 
-        let resizeTimeout;
         window.addEventListener('resize', () => {
-            targetOpacity = 0;
             resize();
-            clearTimeout(resizeTimeout);
-            resizeTimeout = setTimeout(() => {
-                initPeaks();
-                buildGrid();
-                targetOpacity = 1;
-            }, 200);
         });
 
         resize();
